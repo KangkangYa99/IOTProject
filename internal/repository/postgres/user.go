@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -33,7 +34,11 @@ func (r *UserRepository) CreateUser(ctx context.Context, user *domain.RegisterIn
 		0,
 	).Scan(&user.UserID)
 	if err != nil {
-		return fmt.Errorf("repo.CreateUser failed: %w", err)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("%w: %v", error_code.ErrUserExists, err)
+		}
+		return fmt.Errorf("%w: %v", error_code.ErrDB, err)
 	}
 	return nil
 }
@@ -52,7 +57,7 @@ func (r *UserRepository) CheckUserExists(ctx context.Context, username, phone, e
 		&emailExists,
 	)
 	if err != nil {
-		return false, false, false, fmt.Errorf("repo.CheckUserExists failed: %w", err)
+		return false, false, false, fmt.Errorf("%w: %v", error_code.ErrDB, err)
 	}
 	return usernameExists, phoneExists, emailExists, nil
 }
@@ -66,18 +71,18 @@ func (r *UserRepository) UpdateUser(ctx context.Context, user *domain.UpdateUser
             updated_at    = $4
         WHERE user_id = $5`
 	result, err := r.db.Exec(ctx, query,
-		user.PassWordHash,
+		user.PasswordHash,
 		user.PhoneNumber,
 		user.Email,
 		time.Now(),
 		user.UserID,
 	)
 	if err != nil {
-		return fmt.Errorf("db update user failed: %w", err)
+		return fmt.Errorf("%w: %v", error_code.ErrDB, err)
 	}
 	row := result.RowsAffected()
 	if row == 0 {
-		return fmt.Errorf("user not found")
+		return fmt.Errorf("%w", error_code.UserNotExists)
 	}
 	return nil
 }
@@ -99,7 +104,7 @@ func (r *UserRepository) FindByIdentity(ctx context.Context, identity string) (*
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, error_code.UserNotExists
 		}
-		return nil, fmt.Errorf("repository: FindByIdentity 数据库执行失败: %w", err)
+		return nil, fmt.Errorf("%w: %v", error_code.ErrDB, err)
 	}
 
 	return &user, nil
@@ -126,7 +131,7 @@ func (r *UserRepository) GetUserInfoByID(ctx context.Context, UserID int64) (*do
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, error_code.UserNotExists
 		}
-		return nil, fmt.Errorf("repo.FindByID 查询失败: %w", err)
+		return nil, fmt.Errorf("%w: %v", error_code.ErrDB, err)
 	}
 	return &user, nil
 }

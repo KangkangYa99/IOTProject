@@ -19,6 +19,7 @@ type App struct {
 	cfg         *config.Config
 	dbPool      *pgxpool.Pool
 	redisClient *redis.Client
+	locker      utils.Locker
 }
 
 func New() (*App, func(), error) {
@@ -32,6 +33,7 @@ func New() (*App, func(), error) {
 		pool.Close()
 		return nil, nil, fmt.Errorf("初始化 Redis 失败:%w", err)
 	}
+	locker := utils.NewRedisLocker(rdb)
 	cleanup := func() {
 		pool.Close()
 		if err := rdb.Close(); err != nil {
@@ -45,13 +47,14 @@ func New() (*App, func(), error) {
 		cfg:         cfg,
 		dbPool:      pool,
 		redisClient: rdb,
+		locker:      locker,
 	}, cleanup, nil
 }
 func (a *App) Run() error {
 	utils.InitJWT(a.cfg.JWTSecret)
 	userRepo := postgres.NewUserRepository(a.dbPool)
-	userSvc := service.NewUserService(userRepo, a.redisClient)
-	userHdl := http.NewUserHandler(userSvc)
+	userSvc := service.NewUserService(userRepo, a.redisClient, a.locker)
+	userHdl := http.NewUserHandler(*userSvc)
 	r := router.InitRouter(userHdl)
 	fmt.Printf("系统启动成功，监听端口: %s\n", a.cfg.ServerPort)
 	return r.Run(":" + a.cfg.ServerPort)

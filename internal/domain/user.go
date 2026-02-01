@@ -6,17 +6,17 @@ import (
 )
 
 type User struct {
-	UserID       int64      `json:"user_id"`
-	Username     string     `json:"username"`
-	PasswordHash string     `json:"-"`
-	PhoneNumber  string     `json:"phone_number"`
-	AvatarURL    *string    `json:"avatar_url"`
-	Email        string     `json:"email"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	LastLoginAt  *time.Time `json:"last_login_at"`
-	RoleID       int        `json:"role_id"`
-	Status       int        `json:"status"`
+	UserID       int64
+	Username     string
+	PasswordHash string
+	PhoneNumber  string
+	AvatarURL    *string
+	Email        string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	LastLoginAt  *time.Time
+	RoleID       int
+	Status       int
 }
 type RegisterInfo struct {
 	UserID       int64
@@ -24,7 +24,6 @@ type RegisterInfo struct {
 	PasswordHash string
 	PhoneNumber  string
 	Email        string
-	AdminToken   string
 	RoleID       int
 	Status       int
 }
@@ -43,7 +42,7 @@ type RegisterResponse struct {
 }
 type UpdateUser struct {
 	UserID       int64
-	PassWordHash string
+	PasswordHash string
 	PhoneNumber  string
 	Email        string
 }

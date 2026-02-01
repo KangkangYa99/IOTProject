@@ -11,19 +11,24 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/jackc/pgconn"
 	"github.com/redis/go-redis/v9"
 )
 
 type UserService struct {
-	repo  domain.UserInterface
-	redis *redis.Client
+	repo   domain.UserInterface
+	redis  *redis.Client
+	locker utils.Locker
 }
 
-func NewUserService(repo domain.UserInterface, rdb *redis.Client) UserService {
-	return UserService{
-		repo:  repo,
-		redis: rdb,
+func NewUserService(
+	repo domain.UserInterface,
+	rdb *redis.Client,
+	locker utils.Locker,
+) *UserService {
+	return &UserService{
+		repo:   repo,
+		redis:  rdb,
+		locker: locker,
 	}
 }
 func (s *UserService) ValidPassword(password string) error {
@@ -58,7 +63,6 @@ func (s *UserService) ValidPassword(password string) error {
 	return nil
 }
 func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterRequest) (*domain.RegisterResponse, error) {
-	//需要锁定的三个核心维度
 	locks := map[string]string{
 		"lock:reg:user:" + req.Username:     "username",
 		"lock:reg:phone:" + req.PhoneNumber: "phone",
@@ -66,11 +70,11 @@ func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterReque
 	}
 
 	var acquiredLocks []string
-	for lockKey := range locks {
-		ok, err := s.redis.SetNX(ctx, lockKey, "1", 10*time.Second).Result()
+	for _, lockKey := range locks {
+		ok, err := s.locker.Acquire(ctx, lockKey, 10)
 		if err != nil || !ok {
 			for _, k := range acquiredLocks {
-				s.redis.Del(ctx, k)
+				_ = s.locker.Release(ctx, k)
 			}
 			return nil, error_code.RequestTooFrequentError
 		}
@@ -79,13 +83,13 @@ func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterReque
 
 	defer func() {
 		for _, k := range acquiredLocks {
-			s.redis.Del(ctx, k)
+			_ = s.locker.Release(ctx, k)
 		}
 	}()
 
 	uEx, pEx, eEx, err := s.repo.CheckUserExists(ctx, req.Username, req.PhoneNumber, req.Email)
 	if err != nil {
-		return nil, error_code.DatabaseError
+		return nil, err
 	}
 	if uEx {
 		return nil, error_code.UserExists
@@ -95,6 +99,9 @@ func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterReque
 	}
 	if eEx {
 		return nil, error_code.UserEmailExists
+	}
+	if err = s.ValidPassword(req.Password); err != nil {
+		return nil, err
 	}
 	hashedPwd, err := crypto.HashPassword(req.Password)
 	if err != nil {
@@ -114,25 +121,17 @@ func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterReque
 		PasswordHash: hashedPwd,
 		PhoneNumber:  req.PhoneNumber,
 		Email:        req.Email,
-		AdminToken:   req.AdminToken,
 		RoleID:       roleID,
 	}
 	err = s.repo.CreateUser(ctx, userInfo)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			field := "用户数据"
-			switch pgErr.ConstraintName {
-			case "users_username_key":
-				field = "用户名"
-			case "users_email_key":
-				field = "邮箱"
-			case "users_phone_number_key":
-				field = "手机号"
-			}
-			return nil, error_code.DatabaseError.WithDetails(field + "已存在")
+		if errors.Is(err, error_code.ErrUserExists) {
+			return nil, error_code.UserExists
 		}
-		return nil, error_code.DatabaseError
+		if errors.Is(err, error_code.ErrDB) {
+			return nil, error_code.DatabaseError
+		}
+		return nil, err
 	}
 
 	return &domain.RegisterResponse{
@@ -151,14 +150,11 @@ func (s *UserService) UpdateProfile(ctx context.Context, userID int64, req domai
 		if err != nil {
 			return error_code.ServerError
 		}
-		updateData.PassWordHash = hashed
+		updateData.PasswordHash = hashed
 	}
 	err := s.repo.UpdateUser(ctx, updateData)
 	if err != nil {
-		if err.Error() == "user not found" {
-			return error_code.UserNotExists
-		}
-		return error_code.DatabaseError
+		return err
 	}
 	return nil
 }
@@ -169,9 +165,6 @@ func (s *UserService) Login(ctx context.Context, req domain.LoginRequest) (*doma
 	}
 	if user.Status != 0 {
 		return nil, error_code.NoPermission.WithDetails("账号状态异常")
-	}
-	if !crypto.CheckPasswordHash(req.Password, user.PasswordHash) {
-		return nil, error_code.PasswordFail
 	}
 	if !crypto.CheckPasswordHash(req.Password, user.PasswordHash) {
 		return nil, error_code.PasswordFail

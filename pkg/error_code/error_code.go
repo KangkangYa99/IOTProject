@@ -1,6 +1,9 @@
 package error_code
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 type APIError struct {
 	Code    int    `json:"code"`
@@ -29,6 +32,13 @@ const (
 	TokenOutErrorCode
 	RequestTooFrequentCode
 )
+
+var (
+	ErrUserExists = errors.New("user already exists")
+	ErrNotFound   = errors.New("record not found")
+	ErrDB         = errors.New("database error")
+)
+
 const (
 	DeviceNotFoundCode = 30000 + iota
 	DeviceIsBindCode
