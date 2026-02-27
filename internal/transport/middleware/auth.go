@@ -1,17 +1,21 @@
 package middleware
 
 import (
+	"IOTProject/internal/domain"
 	"IOTProject/pkg/error_code"
 	my "IOTProject/pkg/redis"
 	"IOTProject/pkg/response"
 	"IOTProject/pkg/utils"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-func JWTAUTH() gin.HandlerFunc {
+func JWTAUTH(userRepo domain.UserInterface) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -31,24 +35,25 @@ func JWTAUTH() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		tokenKey := fmt.Sprintf("auth:token:%d", claims.UserID)
-		latestToken, err := my.RedisClient.Get(c.Request.Context(), tokenKey).Result()
-		if err == nil && latestToken != parts[1] {
-			_ = c.Error(error_code.TokenOutError) // 或者自定义一个 error_code.UserKickedOut
-			c.Abort()
-			return
-		}
-
-		blackKey := "jwt_blacklist:" + parts[1]
-		exists, _ := my.RedisClient.Exists(c.Request.Context(), blackKey).Result()
-		if exists > 0 {
+		tokenSetKey := fmt.Sprintf("auth:tokens:%d", claims.UserID)
+		exists, err := my.RedisClient.SIsMember(c.Request.Context(), tokenSetKey, parts[1]).Result()
+		if err != nil || !exists {
 			_ = c.Error(error_code.TokenOutError)
 			c.Abort()
 			return
 		}
 
+		roleID, err := userRepo.GetUserRoleByID(c.Request.Context(), claims.UserID)
+		if err != nil {
+			_ = c.Error(err)
+			c.Abort()
+			return
+		}
+		roleKey := fmt.Sprintf("user:role:%d", claims.UserID)
+		my.RedisClient.Set(c.Request.Context(), roleKey, strconv.Itoa(roleID), 2*time.Hour)
+
 		c.Set("userID", claims.UserID)
-		c.Set("roleID", claims.RoleID)
+		c.Set("roleID", roleID)
 		c.Next()
 
 	}
@@ -58,10 +63,9 @@ func ErrorHandler() gin.HandlerFunc {
 		c.Next()
 		if len(c.Errors) > 0 {
 			err := c.Errors.Last().Err
-			if myErr, ok := err.(*error_code.APIError); ok {
+			var myErr *error_code.APIError
+			if errors.As(err, &myErr) {
 				response.Fail(c, myErr.Code, myErr.Message)
-			} else {
-				response.Fail(c, 500, "Internal Server Error")
 			}
 			c.Abort()
 		}

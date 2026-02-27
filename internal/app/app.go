@@ -55,7 +55,12 @@ func (a *App) Run() error {
 	userRepo := postgres.NewUserRepository(a.dbPool)
 	userSvc := service.NewUserService(userRepo, a.redisClient, a.locker)
 	userHdl := http.NewUserHandler(*userSvc)
-	r := router.InitRouter(userHdl)
+
+	deviceRepo := postgres.NewDeviceRepository(a.dbPool)
+	deviceSvc := service.NewDeviceService(deviceRepo)
+	deviceHdl := http.NewDeviceHandle(*deviceSvc)
+
+	r := router.InitRouter(userHdl, deviceHdl, userRepo)
 	fmt.Printf("系统启动成功，监听端口: %s\n", a.cfg.ServerPort)
 	return r.Run(":" + a.cfg.ServerPort)
 

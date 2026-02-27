@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -16,7 +17,7 @@ type User struct {
 	UpdatedAt    time.Time
 	LastLoginAt  *time.Time
 	RoleID       int
-	Status       int
+	Status       sql.NullInt64
 }
 type RegisterInfo struct {
 	UserID       int64
@@ -25,20 +26,27 @@ type RegisterInfo struct {
 	PhoneNumber  string
 	Email        string
 	RoleID       int
-	Status       int
+	Status       sql.NullInt64
 }
 type RegisterRequest struct {
 	Username    string `json:"username" binding:"required,min=3,max=50"`
 	Password    string `json:"password" binding:"required,min=6,max=50"`
 	PhoneNumber string `json:"phone" binding:"required,len=11"`
 	Email       string `json:"email" binding:"required,email"`
-	AdminToken  string `json:"admin_token"`
-	RoleID      int    `json:"role_id"`
+	Status      int    `json:"status"`
 }
 
 type RegisterResponse struct {
 	UserID   int64  `json:"user_id"`
 	Username string `json:"username"`
+}
+type AdminCreateUserRequest struct {
+	Username    string `json:"username" binding:"required,min=3,max=50"`
+	Password    string `json:"password" binding:"required,min=6,max=50"`
+	PhoneNumber string `json:"phone" binding:"required,len=11"`
+	Email       string `json:"email" binding:"required,email"`
+	RoleID      int    `json:"role_id" binding:"required,min=1,max=3"`
+	Status      int    `json:"status"`
 }
 type UpdateUser struct {
 	UserID       int64
@@ -66,4 +74,5 @@ type UserInterface interface {
 	UpdateUser(ctx context.Context, user *UpdateUser) error
 	FindByIdentity(ctx context.Context, identity string) (*User, error)
 	GetUserInfoByID(ctx context.Context, UserID int64) (*User, error)
+	GetUserRoleByID(ctx context.Context, userID int64) (int, error)
 }

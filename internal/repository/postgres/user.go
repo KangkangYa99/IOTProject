@@ -24,7 +24,7 @@ func NewUserRepository(db *pgxpool.Pool) domain.UserInterface {
 }
 func (r *UserRepository) CreateUser(ctx context.Context, user *domain.RegisterInfo) error {
 	query := `INSERT INTO users (username, password_hash, phone_number, email, role_id,status)
-             VALUES ($1, $2, $3, $4, $5,$6) RETURNING user_id`
+				VALUES ($1, $2, $3, $4, $5,$6) RETURNING user_id`
 	err := r.db.QueryRow(ctx, query,
 		user.Username,
 		user.PasswordHash,
@@ -134,4 +134,16 @@ func (r *UserRepository) GetUserInfoByID(ctx context.Context, UserID int64) (*do
 		return nil, fmt.Errorf("%w: %v", error_code.ErrDB, err)
 	}
 	return &user, nil
+}
+func (r *UserRepository) GetUserRoleByID(ctx context.Context, userID int64) (int, error) {
+	var roleID int
+	query := `SELECT role_id FROM users WHERE user_id = $1`
+	err := r.db.QueryRow(ctx, query, userID).Scan(&roleID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, error_code.UserNotExists
+		}
+		return 0, fmt.Errorf("%w: %v", error_code.ErrDB, err)
+	}
+	return roleID, nil
 }

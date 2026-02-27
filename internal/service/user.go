@@ -107,21 +107,12 @@ func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterReque
 	if err != nil {
 		return nil, error_code.ServerError
 	}
-	roleID := 1
-	if req.RoleID == 2 || req.RoleID == 3 {
-		expectedToken := fmt.Sprintf("IOT%d", req.RoleID)
-		if req.AdminToken != expectedToken {
-			return nil, error_code.NoPermission
-		}
-		roleID = req.RoleID
-	}
-
 	userInfo := &domain.RegisterInfo{
 		Username:     req.Username,
 		PasswordHash: hashedPwd,
 		PhoneNumber:  req.PhoneNumber,
 		Email:        req.Email,
-		RoleID:       roleID,
+		RoleID:       1,
 	}
 	err = s.repo.CreateUser(ctx, userInfo)
 	if err != nil {
@@ -134,6 +125,63 @@ func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterReque
 		return nil, err
 	}
 
+	return &domain.RegisterResponse{
+		UserID:   userInfo.UserID,
+		Username: userInfo.Username,
+	}, nil
+}
+func (s *UserService) AdminCreateUser(ctx context.Context, req domain.AdminCreateUserRequest, currentUserRole int) (*domain.RegisterResponse, error) {
+	switch currentUserRole {
+	case 1: // 普通员工
+		return nil, error_code.NoPermission.WithDetails("无法创建用户")
+	case 2: // 管理员
+		if req.RoleID != 1 {
+			return nil, error_code.NoPermission.WithDetails("管理员只能创建普通员工")
+		}
+	case 3: // 经理
+		if req.RoleID != 1 && req.RoleID != 2 {
+			return nil, error_code.NoPermission.WithDetails("经理只能创建普通员工或管理员")
+		}
+	default:
+		return nil, error_code.NoPermission.WithDetails("无效的用户角色")
+	}
+	if err := s.ValidPassword(req.Password); err != nil {
+		return nil, err
+	}
+	uEx, pEx, eEx, err := s.repo.CheckUserExists(ctx, req.Username, req.PhoneNumber, req.Email)
+	if err != nil {
+		return nil, err
+	}
+	if uEx {
+		return nil, error_code.UserExists
+	}
+	if pEx {
+		return nil, error_code.UserNumberExists
+	}
+	if eEx {
+		return nil, error_code.UserEmailExists
+	}
+	hashedPwd, err := crypto.HashPassword(req.Password)
+	if err != nil {
+		return nil, error_code.ServerError
+	}
+	userInfo := &domain.RegisterInfo{
+		Username:     req.Username,
+		PasswordHash: hashedPwd,
+		PhoneNumber:  req.PhoneNumber,
+		Email:        req.Email,
+		RoleID:       req.RoleID,
+	}
+	err = s.repo.CreateUser(ctx, userInfo)
+	if err != nil {
+		if errors.Is(err, error_code.ErrUserExists) {
+			return nil, error_code.UserExists
+		}
+		if errors.Is(err, error_code.ErrDB) {
+			return nil, error_code.DatabaseError
+		}
+		return nil, err
+	}
 	return &domain.RegisterResponse{
 		UserID:   userInfo.UserID,
 		Username: userInfo.Username,
@@ -163,24 +211,26 @@ func (s *UserService) Login(ctx context.Context, req domain.LoginRequest) (*doma
 	if err != nil {
 		return nil, error_code.PasswordFail
 	}
-	if user.Status != 0 {
+	if !user.Status.Valid || user.Status.Int64 != 0 {
 		return nil, error_code.NoPermission.WithDetails("账号状态异常")
 	}
+
 	if !crypto.CheckPasswordHash(req.Password, user.PasswordHash) {
 		return nil, error_code.PasswordFail
 	}
-	token, err := utils.GenerateToken(user.UserID, user.RoleID)
+	token, err := utils.GenerateToken(user.UserID)
 	if err != nil {
 		return nil, error_code.ServerError
 	}
-	tokenKey := fmt.Sprintf("auth:token:%d", user.UserID)
-	err = s.redis.Set(ctx, tokenKey, token, 24*time.Hour).Err()
+	tokenSetKey := fmt.Sprintf("auth:tokens:%d", user.UserID)
+	err = s.redis.SAdd(ctx, tokenSetKey, token).Err()
 	if err != nil {
 		fmt.Printf("Redis 记录 Token 失败: %v\n", err)
 	}
+	s.redis.Expire(ctx, tokenSetKey, 3*24*time.Hour)
 	return &domain.LoginResponse{
 		AccessToken: token,
-		ExpiresIn:   86400, // 24小时
+		ExpiresIn:   3 * 86400,
 	}, nil
 }
 func (s *UserService) GetUserByID(ctx context.Context, userID int64) (*domain.User, error) {
@@ -189,4 +239,16 @@ func (s *UserService) GetUserByID(ctx context.Context, userID int64) (*domain.Us
 		return nil, err
 	}
 	return user, nil
+}
+func (s *UserService) Logout(ctx context.Context, userID int64, token string) error {
+	tokenSetKey := fmt.Sprintf("auth:tokens:%d", userID)
+	err := s.redis.SRem(ctx, tokenSetKey, token).Err()
+	if err != nil {
+		return fmt.Errorf("failed to remove token: %w", err)
+	}
+	count, err := s.redis.SCard(ctx, tokenSetKey).Result()
+	if err == nil && count == 0 {
+		s.redis.Del(ctx, tokenSetKey)
+	}
+	return nil
 }

@@ -34,9 +34,12 @@ const (
 )
 
 var (
-	ErrUserExists = errors.New("user already exists")
-	ErrNotFound   = errors.New("record not found")
-	ErrDB         = errors.New("database error")
+	ErrUserExists          = errors.New("user already exists")
+	ErrNotFound            = errors.New("record not found")
+	ErrDB                  = errors.New("database error")
+	ErrDeviceAlreadyExists = errors.New("device is registered")
+	ErrInvalidSN           = errors.New("invalid UID")
+	ErrDeviceNotFound      = errors.New("device not found")
 )
 
 const (

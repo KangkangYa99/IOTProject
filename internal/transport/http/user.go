@@ -4,12 +4,10 @@ import (
 	"IOTProject/internal/domain"
 	"IOTProject/internal/service"
 	"IOTProject/pkg/error_code"
-	myredis "IOTProject/pkg/redis"
 	"IOTProject/pkg/response"
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -35,6 +33,36 @@ func (h *UserHandler) Register(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, res)
+}
+func (h *UserHandler) AdminCreateUser(c *gin.Context) {
+	_, exists := c.Get("userID")
+
+	if !exists {
+		response.Fail(c, 401, "未登录")
+		return
+	}
+	currentUserRole, exists := c.Get("roleID")
+	if !exists {
+		response.Fail(c, 401, "权限信息缺失")
+		return
+	}
+	roleID := currentUserRole.(int)
+	// 权限验证：只有管理员(2)及以上才能创建用户
+	if roleID < 2 {
+		response.Fail(c, 403, "权限不足，无法创建用户")
+		return
+	}
+	var req domain.AdminCreateUserRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, 400, "参数错误: "+err.Error())
+		return
+	}
+	res, err := h.svc.AdminCreateUser(c.Request.Context(), req, roleID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	response.Success(c, res)
 }
 func (h *UserHandler) Login(c *gin.Context) {
 	var req domain.LoginRequest
@@ -75,10 +103,12 @@ func (h *UserHandler) Logout(c *gin.Context) {
 		return
 	}
 	token := parts[1]
-	blackKey := "jwt_blacklist:" + token
-	_ = myredis.RedisClient.Set(c.Request.Context(), blackKey, "1", 24*time.Hour).Err()
-	uid, _ := c.Get("userID")
-	tokenKey := fmt.Sprintf("auth:token:%v", uid)
-	_ = myredis.RedisClient.Del(c.Request.Context(), tokenKey).Err()
+	uid, exists := c.Get("userID")
+	if exists {
+		userID, ok := uid.(int64)
+		if ok {
+			_ = h.svc.Logout(c.Request.Context(), userID, token)
+		}
+	}
 	response.Success(c, "登出成功")
 }

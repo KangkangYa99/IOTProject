@@ -14,16 +14,14 @@ func InitJWT(secret string) {
 
 type MyClaims struct {
 	UserID int64 `json:"user_id"`
-	RoleID int   `json:"role_id"`
 	jwt.RegisteredClaims
 }
 
-func GenerateToken(userID int64, roleID int) (string, error) {
+func GenerateToken(userID int64) (string, error) {
 	nowTime := time.Now()
 	expireTime := nowTime.Add(2 * time.Hour)
 	claims := MyClaims{
 		UserID: userID,
-		RoleID: roleID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expireTime),
 			IssuedAt:  jwt.NewNumericDate(nowTime),
