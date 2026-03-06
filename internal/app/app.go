@@ -11,13 +11,14 @@ import (
 	"IOTProject/pkg/utils"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	gormpg "gorm.io/driver/postgres" // 给 GORM 驱动起别名
+	"gorm.io/gorm"
 )
 
 type App struct {
 	cfg         *config.Config
-	dbPool      *pgxpool.Pool
+	dbgorm      *gorm.DB
 	redisClient *redis.Client
 	locker      utils.Locker
 }
@@ -33,6 +34,11 @@ func New() (*App, func(), error) {
 		pool.Close()
 		return nil, nil, fmt.Errorf("初始化 Redis 失败:%w", err)
 	}
+	gormDb, err := gorm.Open(gormpg.Open(cfg.GetDSN()), &gorm.Config{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("GORM初始化失败: %w", err)
+	}
+
 	locker := utils.NewRedisLocker(rdb)
 	cleanup := func() {
 		pool.Close()
@@ -45,22 +51,26 @@ func New() (*App, func(), error) {
 	fmt.Println("所有依赖项注入完成")
 	return &App{
 		cfg:         cfg,
-		dbPool:      pool,
+		dbgorm:      gormDb,
 		redisClient: rdb,
 		locker:      locker,
 	}, cleanup, nil
 }
 func (a *App) Run() error {
 	utils.InitJWT(a.cfg.JWTSecret)
-	userRepo := postgres.NewUserRepository(a.dbPool)
+	userRepo := postgres.NewUserRepository(a.dbgorm)
 	userSvc := service.NewUserService(userRepo, a.redisClient, a.locker)
 	userHdl := http.NewUserHandler(*userSvc)
 
-	deviceRepo := postgres.NewDeviceRepository(a.dbPool)
+	deviceRepo := postgres.NewDeviceRepository(a.dbgorm)
 	deviceSvc := service.NewDeviceService(deviceRepo)
 	deviceHdl := http.NewDeviceHandle(*deviceSvc)
 
-	r := router.InitRouter(userHdl, deviceHdl, userRepo)
+	devicedataRepo := postgres.NewDeviceDataRepository(a.dbgorm)
+	devicedataSvc := service.NewDeviceDataService(devicedataRepo, deviceRepo)
+	devicedataHdl := http.NewDeviceDataHandle(*devicedataSvc)
+
+	r := router.InitRouter(userHdl, deviceHdl, devicedataHdl, userRepo)
 	fmt.Printf("系统启动成功，监听端口: %s\n", a.cfg.ServerPort)
 	return r.Run(":" + a.cfg.ServerPort)
 
