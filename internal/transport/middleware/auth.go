@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func JWTAUTH(userRepo domain.UserInterface) gin.HandlerFunc {
+func JWTAUTH(userRepo domain.UserRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
