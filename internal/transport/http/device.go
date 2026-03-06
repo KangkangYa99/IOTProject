@@ -18,35 +18,49 @@ func NewDeviceHandle(svc service.DeviceService) *DeviceHandle {
 		svc: svc,
 	}
 }
+
+// BindDevice 处理设备绑定接口
 func (h *DeviceHandle) BindDevice(c *gin.Context) {
 	var req domain.BindDeviceResp
 	if err := c.ShouldBindJSON(&req); err != nil {
-		_ = c.Error(error_code.InvalidParam)
+		_ = c.Error(error_code.InvalidParam.WithDetails(err.Error()))
 		return
 	}
-	userID, exists := c.Get("userID")
-
-	if exists {
-		req.UserID = userID.(int64)
+	val, exists := c.Get("userID")
+	if !exists {
+		_ = c.Error(error_code.NotLogin)
+		return
 	}
+	userID, ok := val.(int64)
+	if !ok {
+		return
+	}
+	req.UserID = userID
 
-	err := h.svc.BindDevice(c.Request.Context(), &req)
-	if err != nil {
+	if err := h.svc.BindDevice(c.Request.Context(), &req); err != nil {
 		_ = c.Error(err)
 		return
 	}
 	response.Success(c, nil)
 }
+
+// UnBindDevice 处理设备解绑接口
 func (h *DeviceHandle) UnBindDevice(c *gin.Context) {
 	var req domain.UnbindDevice
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(error_code.InvalidParam)
 		return
 	}
-	userID, exists := c.Get("userID")
-	if exists {
-		req.UserID = userID.(int64)
+	val, exists := c.Get("userID")
+	if !exists {
+		_ = c.Error(error_code.NotLogin)
+		return
 	}
+	userID, ok := val.(int64)
+	if !ok {
+		return
+	}
+	req.UserID = userID
 	err := h.svc.UnBindDevice(c.Request.Context(), &req)
 	if err != nil {
 		_ = c.Error(err)
@@ -54,14 +68,19 @@ func (h *DeviceHandle) UnBindDevice(c *gin.Context) {
 	}
 	response.Success(c, nil)
 }
+
+// GetDevicesInfo 获取当前登录用户的所有设备列表
 func (h *DeviceHandle) GetDevicesInfo(c *gin.Context) {
 	val, exists := c.Get("userID")
 	if !exists {
 		_ = c.Error(error_code.NotLogin)
 		return
 	}
-	userID := val.(int64)
-	info, err := h.svc.GetDeviceInfo(c.Request.Context(), &userID)
+	userID, ok := val.(int64)
+	if !ok {
+		return
+	}
+	info, err := h.svc.GetDeviceInfo(c.Request.Context(), userID)
 	if err != nil {
 		_ = c.Error(err)
 		return
