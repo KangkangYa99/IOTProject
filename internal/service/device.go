@@ -2,33 +2,70 @@ package service
 
 import (
 	"IOTProject/internal/domain"
+	"IOTProject/pkg/error_code"
 	"context"
+	"errors"
+	"log"
+
+	"gorm.io/gorm"
 )
 
 type DeviceService struct {
-	repo domain.DeviceInterface
+	repo domain.DeviceRepository
 }
 
-func NewDeviceService(repo domain.DeviceInterface) *DeviceService {
+func NewDeviceService(repo domain.DeviceRepository) *DeviceService {
 	return &DeviceService{
 		repo: repo,
 	}
 }
-func (s *DeviceService) BindDevice(ctx context.Context, DeviceInfo *domain.BindDeviceResp) error {
-	err := s.repo.BindDevice(ctx, DeviceInfo)
+func (s *DeviceService) BindDevice(ctx context.Context, req *domain.BindDeviceResp) error {
+	//查看设备拥有者
+	ownerID, err := s.repo.GetDeviceOwner(ctx, req.DeviceUID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return error_code.DeviceNotFound
+		}
+		return err
+	}
+	//设备被其他人绑定
+	if ownerID != nil {
+
+		log.Printf("[DEBUG] 设备 %s 已被绑定, 拥有者 ID: %d", req.DeviceUID, *ownerID)
+		return error_code.DeviceIsBind
+	}
+	return s.repo.BindDevice(ctx, req)
+}
+
+// UnBindDevice 执行设备解绑逻辑
+// 采用“先校验、后执行”的策略。
+func (s *DeviceService) UnBindDevice(ctx context.Context, req *domain.UnbindDevice) error {
+	//判断设备归属
+	ownerID, err := s.repo.GetDeviceOwner(ctx, req.DeviceUID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return error_code.DeviceNotFound
+		}
+		return err
+	}
+	// 权限校验
+	if ownerID == nil {
+		return error_code.DeviceNotBind
+	}
+	if *ownerID != req.UserID {
+		return error_code.NotDeviceOwner
+	}
+	rows, err := s.repo.UnbindDevice(ctx, req)
 	if err != nil {
 		return err
+	}
+	if rows == 0 {
+		return error_code.NotDeviceOwner
 	}
 	return nil
 }
 
-func (s *DeviceService) UnBindDevice(ctx context.Context, DeviceInfo *domain.UnbindDevice) error {
-	err := s.repo.UnbindDevice(ctx, DeviceInfo)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-func (s *DeviceService) GetDeviceInfo(ctx context.Context, userID *int64) (*domain.DeviceInfo, error) {
+// GetDeviceInfo 获取指定用户的设备资产列表
+func (s *DeviceService) GetDeviceInfo(ctx context.Context, userID int64) (*domain.DeviceInfo, error) {
 	return s.repo.GetDeviceInfo(ctx, userID)
 }
