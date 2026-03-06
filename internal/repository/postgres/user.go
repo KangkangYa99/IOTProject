@@ -6,33 +6,27 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 )
 
 type UserRepository struct {
-	db *pgxpool.Pool
+	gorm *gorm.DB
 }
 
-func NewUserRepository(db *pgxpool.Pool) domain.UserInterface {
+func NewUserRepository(gorm *gorm.DB) domain.UserRepository {
 	return &UserRepository{
-		db: db,
+		gorm: gorm,
 	}
 }
-func (r *UserRepository) CreateUser(ctx context.Context, user *domain.RegisterInfo) error {
-	query := `INSERT INTO users (username, password_hash, phone_number, email, role_id,status)
-				VALUES ($1, $2, $3, $4, $5,$6) RETURNING user_id`
-	err := r.db.QueryRow(ctx, query,
-		user.Username,
-		user.PasswordHash,
-		user.PhoneNumber,
-		user.Email,
-		user.RoleID,
-		0,
-	).Scan(&user.UserID)
+
+// CreateUser 在数据库中创建新用户
+// 默认设置用户状态为正常(1)，并处理 PostgreSQL 的唯一约束冲突（错误码 23505），
+// 若用户名、手机号或邮箱已存在，则返回自定义的 ErrUserExists 错误。
+func (r *UserRepository) CreateUser(ctx context.Context, user *domain.User) error {
+	user.Status = 1
+	err := r.gorm.WithContext(ctx).Create(user).Error
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -42,66 +36,34 @@ func (r *UserRepository) CreateUser(ctx context.Context, user *domain.RegisterIn
 	}
 	return nil
 }
-func (r *UserRepository) CheckUserExists(ctx context.Context, username, phone, email string) (bool, bool, bool, error) {
-	var usernameExists, phoneExists, emailExists bool
 
-	query := `
-        SELECT 
-            EXISTS(SELECT 1 FROM users WHERE username = $1),
-            EXISTS(SELECT 1 FROM users WHERE phone_number = $2),
-            EXISTS(SELECT 1 FROM users WHERE email = $3)
-    `
-	err := r.db.QueryRow(ctx, query, username, phone, email).Scan(
-		&usernameExists,
-		&phoneExists,
-		&emailExists,
-	)
-	if err != nil {
-		return false, false, false, fmt.Errorf("%w: %v", error_code.ErrDB, err)
-	}
-	return usernameExists, phoneExists, emailExists, nil
+// CheckUserExists 并行检查用户名、手机号和邮箱在数据库中是否已存在
+// 使用高效的 EXISTS 子查询一次性返回三个维度的存在性状态，
+// 返回值依次对应：用户名是否存在、手机号是否存在、邮箱是否存在。
+func (r *UserRepository) CheckUserExists(ctx context.Context, username, phone, email string) (bool, bool, bool, error) {
+	var uCount, pCount, eCount int64
+
+	// 建议在 User 模型里对应好字段名
+	r.gorm.WithContext(ctx).Model(&domain.User{}).Where("username = ?", username).Count(&uCount)
+	r.gorm.WithContext(ctx).Model(&domain.User{}).Where("phone_number = ?", phone).Count(&pCount)
+	r.gorm.WithContext(ctx).Model(&domain.User{}).Where("email = ?", email).Count(&eCount)
+
+	return uCount > 0, pCount > 0, eCount > 0, nil
 }
-func (r *UserRepository) UpdateUser(ctx context.Context, user *domain.UpdateUser) error {
-	query := `
-        UPDATE users 
-        SET 
-            password_hash = COALESCE(NULLIF($1, ''), password_hash),
-            phone_number  = COALESCE(NULLIF($2, ''), phone_number),
-            email         = COALESCE(NULLIF($3, ''), email),
-            updated_at    = $4
-        WHERE user_id = $5`
-	result, err := r.db.Exec(ctx, query,
-		user.PasswordHash,
-		user.PhoneNumber,
-		user.Email,
-		time.Now(),
-		user.UserID,
-	)
-	if err != nil {
-		return fmt.Errorf("%w: %v", error_code.ErrDB, err)
-	}
-	row := result.RowsAffected()
-	if row == 0 {
-		return fmt.Errorf("%w", error_code.UserNotExists)
-	}
-	return nil
-}
+
+// FindByIdentity 根据身份标识查找唯一用户
+// 支持通过用户名、手机号或邮箱（三选一）进行匹配，
+// 若记录不存在则返回 UserNotExists 错误，常用于登录逻辑中的用户定位。
 func (r *UserRepository) FindByIdentity(ctx context.Context, identity string) (*domain.User, error) {
 	var user domain.User
-	query := `
-		SELECT user_id, password_hash, role_id, status 
-		FROM users 
-		WHERE (username = $1 OR phone_number = $1 OR email = $1)
-		LIMIT 1
-	`
-	err := r.db.QueryRow(ctx, query, identity).Scan(
-		&user.UserID,
-		&user.PasswordHash,
-		&user.RoleID,
-		&user.Status,
-	)
+	err := r.gorm.WithContext(ctx).
+		Where("username = ?", identity).
+		Or("phone_number = ?", identity).
+		Or("email = ?", identity).
+		First(&user).Error
+
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, error_code.UserNotExists
 		}
 		return nil, fmt.Errorf("%w: %v", error_code.ErrDB, err)
@@ -109,41 +71,60 @@ func (r *UserRepository) FindByIdentity(ctx context.Context, identity string) (*
 
 	return &user, nil
 }
-func (r *UserRepository) GetUserInfoByID(ctx context.Context, UserID int64) (*domain.User, error) {
+
+// UpdateUser 更新指定用户的个人资料
+// 传入 UpdateUser 结构体，GORM 会自动忽略其中的零值（空字符串）字段进行局部更新。
+// 若未找到对应的 UserID，则返回 UserNotExists 错误。
+func (r *UserRepository) UpdateUser(ctx context.Context, user *domain.UpdateUser) error {
+	updates := make(map[string]interface{})
+	if user.PhoneNumber != "" {
+		updates["phone_number"] = user.PhoneNumber
+	}
+	if user.Email != "" {
+		updates["email"] = user.Email
+	}
+	if user.PasswordHash != "" {
+		updates["password_hash"] = user.PasswordHash
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	result := r.gorm.WithContext(ctx).
+		Debug().
+		Model(&domain.User{}).
+		Where("user_id = ?", user.UserID).
+		Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+
+	return nil
+}
+
+// GetUserInfoByID 根据用户 ID 获取用户详细信息
+func (r *UserRepository) GetUserInfoByID(ctx context.Context, userID int64) (*domain.User, error) {
 	var user domain.User
-	query := `
-        SELECT user_id, username, phone_number, email, avatar_url, role_id, status, created_at, last_login_at 
-        FROM users 
-        WHERE user_id = $1
-    `
-	err := r.db.QueryRow(ctx, query, UserID).Scan(
-		&user.UserID,
-		&user.Username,
-		&user.PhoneNumber,
-		&user.Email,
-		&user.AvatarURL, // 对应 *string
-		&user.RoleID,
-		&user.Status,
-		&user.CreatedAt,
-		&user.LastLoginAt, // 对应 *time.Time
-	)
+	err := r.gorm.WithContext(ctx).
+		Where("user_id = ?", userID).
+		First(&user).Error
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, error_code.UserNotExists
 		}
 		return nil, fmt.Errorf("%w: %v", error_code.ErrDB, err)
 	}
 	return &user, nil
 }
+
 func (r *UserRepository) GetUserRoleByID(ctx context.Context, userID int64) (int, error) {
 	var roleID int
-	query := `SELECT role_id FROM users WHERE user_id = $1`
-	err := r.db.QueryRow(ctx, query, userID).Scan(&roleID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return 0, error_code.UserNotExists
-		}
-		return 0, fmt.Errorf("%w: %v", error_code.ErrDB, err)
+
+	res := r.gorm.WithContext(ctx).Table("users").Where("user_id = ?", userID).Select("role_id").Scan(&roleID)
+	if res.Error != nil {
+		return 0, fmt.Errorf("%w: %v", error_code.ErrDB, res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return 0, error_code.UserNotExists
 	}
 	return roleID, nil
 }
