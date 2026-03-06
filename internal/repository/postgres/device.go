@@ -7,98 +7,84 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 )
 
 type DeviceRepository struct {
-	db *pgxpool.Pool
+	gorm *gorm.DB
 }
 
-func NewDeviceRepository(db *pgxpool.Pool) *DeviceRepository {
+func NewDeviceRepository(db2 *gorm.DB) *DeviceRepository {
 	return &DeviceRepository{
-		db: db,
+		gorm: db2,
 	}
 }
 
-func (d *DeviceRepository) GetDeviceOwner(ctx context.Context, uid string) (*int64, error) {
-	var userID *int64
-	query := `SELECT user_id FROM devices WHERE device_uid = $1`
-	err := d.db.QueryRow(ctx, query, uid).Scan(&userID)
-	if err != nil {
-		return nil, err
-	}
-	return userID, nil
-}
+// BindDevice 执行原子的设备更新操作
 func (d *DeviceRepository) BindDevice(ctx context.Context, BindInfo *domain.BindDeviceResp) error {
-	ownerID, err := d.GetDeviceOwner(ctx, BindInfo.DeviceUID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return error_code.DeviceNotFound
-		}
-		return fmt.Errorf("%w: %v", error_code.ErrDB, err)
-	}
-	if ownerID != nil {
-		return error_code.DeviceIsBind
-	}
+	result := d.gorm.WithContext(ctx).
+		Model(&domain.Device{}).
+		Where("device_uid = ? AND user_id IS NULL", BindInfo.DeviceUID).
+		Updates(map[string]interface{}{
+			"user_id":     BindInfo.UserID,
+			"device_name": BindInfo.DeviceName,
+		})
 
-	query := `UPDATE devices SET user_id = $1, device_name = $2 WHERE device_uid = $3 AND user_id IS NULL`
-
-	result, err := d.db.Exec(ctx, query, BindInfo.UserID, BindInfo.DeviceName, BindInfo.DeviceUID)
-	if err != nil {
-		return fmt.Errorf("%w: %v", error_code.ErrDB, err)
+	if result.Error != nil {
+		return fmt.Errorf("%w: %v", error_code.ErrDB, result.Error)
 	}
-	if result.RowsAffected() == 0 {
+	if result.RowsAffected == 0 {
 		return error_code.DeviceIsBind
 	}
 	return nil
 }
-func (d *DeviceRepository) UnbindDevice(ctx context.Context, DeleteInfo *domain.UnbindDevice) error {
-	query := `UPDATE devices SET user_id = NULL, device_name = '' WHERE device_uid = $1 AND user_id = $2`
-	result, err := d.db.Exec(ctx, query, DeleteInfo.DeviceUID, DeleteInfo.UserID)
-	if err != nil {
-		return fmt.Errorf("%w: %v", error_code.ErrDB, err)
-	}
-	if result.RowsAffected() == 0 {
-		ownerID, err := d.GetDeviceOwner(ctx, DeleteInfo.DeviceUID)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return error_code.DeviceNotFound
-			}
-			return fmt.Errorf("%w: %v", error_code.ErrDB, err)
-		}
-		if ownerID == nil {
-			return error_code.DeviceNotBind
-		}
-		return error_code.NotDeviceOwner
-	}
-	return nil
+
+// UnbindDevice 执行数据库层面的解绑动作
+// 根据设备 UID 和用户 ID 进行匹配更新，返回受影响的行数。
+func (d *DeviceRepository) UnbindDevice(ctx context.Context, req *domain.UnbindDevice) (int64, error) {
+	result := d.gorm.WithContext(ctx).
+		Model(&domain.Device{}).
+		// 使用结构体中的字段进行匹配
+		Where("device_uid = ? AND user_id = ?", req.DeviceUID, req.UserID).
+		Select("UserID", "DeviceName").
+		Updates(map[string]interface{}{
+			"user_id":     nil,
+			"device_name": "",
+		})
+
+	return result.RowsAffected, result.Error
 }
-func (d *DeviceRepository) GetDeviceInfo(ctx context.Context, userID *int64) (*domain.DeviceInfo, error) {
-	var info domain.DeviceInfo
-	info.Devices = make([]domain.Device, 0)
-	query := `
-        SELECT device_id, device_name, device_uid, user_id, device_status, last_online, created_at, updated_at 
-        FROM devices 
-        WHERE user_id = $1 
-        ORDER BY device_uid DESC`
-	rows, err := d.db.Query(ctx, query, userID)
+
+// GetDeviceInfo 根据用户 ID 获取设备列表
+// 自动处理结果集映射与总数统计，按照设备 UID 降序排列。
+func (d *DeviceRepository) GetDeviceInfo(ctx context.Context, userID int64) (*domain.DeviceInfo, error) {
+	var devices []domain.Device
+	err := d.gorm.WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("device_uid DESC").
+		Find(&devices).Error
+
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", error_code.ErrDB, err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var dev domain.Device
-		err := rows.Scan(
-			&dev.DeviceID, &dev.DeviceName, &dev.DeviceUID,
-			&dev.UserID, &dev.DeviceStatus, &dev.LastOnline,
-			&dev.CreatedAt, &dev.UpdatedAt,
-		)
-		if err != nil {
-			return nil, err
+	return &domain.DeviceInfo{
+		TotalCount: len(devices),
+		Devices:    devices,
+	}, nil
+}
+
+// GetDeviceOwner 根据设备唯一标识查询所属用户 ID
+func (d *DeviceRepository) GetDeviceOwner(ctx context.Context, uid string) (*int64, error) {
+	var device domain.Device
+	err := d.gorm.WithContext(ctx).
+		Select("user_id").
+		Where("device_uid = ?", uid).
+		First(&device).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, error_code.DeviceNotFound
 		}
-		info.Devices = append(info.Devices, dev)
+		return nil, fmt.Errorf("%w: %v", error_code.ErrDB, err)
 	}
-	info.TotalCount = len(info.Devices)
-	return &info, nil
+	return device.UserID, nil
 }
