@@ -1,12 +1,16 @@
 package utils
 
 import (
+	"errors"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var secretKey []byte
+var (
+	secretKey                  []byte
+	ErrJWTSecretNotInitialized = errors.New("jwt secret not initialized")
+)
 
 func InitJWT(secret string) {
 	secretKey = []byte(secret)
@@ -18,8 +22,11 @@ type MyClaims struct {
 }
 
 func GenerateToken(userID int64) (string, error) {
+	if len(secretKey) == 0 {
+		return "", ErrJWTSecretNotInitialized
+	}
 	nowTime := time.Now()
-	expireTime := nowTime.Add(2 * time.Hour)
+	expireTime := nowTime.Add(3 * 24 * time.Hour)
 	claims := MyClaims{
 		UserID: userID,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -32,14 +39,21 @@ func GenerateToken(userID int64) (string, error) {
 	return token.SignedString(secretKey)
 }
 func ParseToken(tokenstring string) (*MyClaims, error) {
+	if len(secretKey) == 0 {
+		return nil, ErrJWTSecretNotInitialized
+	}
 	token, err := jwt.ParseWithClaims(tokenstring, &MyClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if token.Method != jwt.SigningMethodHS256 {
+			return nil, jwt.ErrSignatureInvalid
+		}
 		return secretKey, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if claims, ok := token.Claims.(*MyClaims); ok && token.Valid {
-		return claims, nil
+	claims, ok := token.Claims.(*MyClaims)
+	if !ok || !token.Valid {
+		return nil, jwt.ErrTokenInvalidClaims
 	}
-	return nil, err
+	return claims, nil
 }
