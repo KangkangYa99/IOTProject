@@ -41,14 +41,31 @@ func (r *UserRepository) CreateUser(ctx context.Context, user *domain.User) erro
 // 使用高效的 EXISTS 子查询一次性返回三个维度的存在性状态，
 // 返回值依次对应：用户名是否存在、手机号是否存在、邮箱是否存在。
 func (r *UserRepository) CheckUserExists(ctx context.Context, username, phone, email string) (bool, bool, bool, error) {
-	var uCount, pCount, eCount int64
-
-	// 建议在 User 模型里对应好字段名
-	r.gorm.WithContext(ctx).Model(&domain.User{}).Where("username = ?", username).Count(&uCount)
-	r.gorm.WithContext(ctx).Model(&domain.User{}).Where("phone_number = ?", phone).Count(&pCount)
-	r.gorm.WithContext(ctx).Model(&domain.User{}).Where("email = ?", email).Count(&eCount)
-
-	return uCount > 0, pCount > 0, eCount > 0, nil
+	var results []struct {
+		Username    string
+		PhoneNumber string
+		Email       string
+	}
+	err := r.gorm.WithContext(ctx).Model(&domain.User{}).
+		Select("username, phone_number, email").
+		Where("username = ? OR phone_number = ? OR email = ?", username, phone, email).
+		Find(&results).Error
+	if err != nil {
+		return false, false, false, err
+	}
+	var uEx, pEx, eEx bool
+	for _, row := range results {
+		if row.Username == username {
+			uEx = true
+		}
+		if row.PhoneNumber == phone {
+			pEx = true
+		}
+		if row.Email == email {
+			eEx = true
+		}
+	}
+	return uEx, pEx, eEx, nil
 }
 
 // FindByIdentity 根据身份标识查找唯一用户
@@ -72,9 +89,15 @@ func (r *UserRepository) FindByIdentity(ctx context.Context, identity string) (*
 	return &user, nil
 }
 
+// UpdatePasswordHash 根据用户 ID 更新其加密后的密码哈希值。
+func (r *UserRepository) UpdatePasswordHash(ctx context.Context, userID int64, newHash string) error {
+	return r.gorm.WithContext(ctx).
+		Model(&domain.User{}).
+		Where("user_id = ?", userID).
+		Update("password_hash", newHash).Error
+}
+
 // UpdateUser 更新指定用户的个人资料
-// 传入 UpdateUser 结构体，GORM 会自动忽略其中的零值（空字符串）字段进行局部更新。
-// 若未找到对应的 UserID，则返回 UserNotExists 错误。
 func (r *UserRepository) UpdateUser(ctx context.Context, user *domain.UpdateUser) error {
 	updates := make(map[string]interface{})
 	if user.PhoneNumber != "" {
@@ -90,7 +113,6 @@ func (r *UserRepository) UpdateUser(ctx context.Context, user *domain.UpdateUser
 		return nil
 	}
 	result := r.gorm.WithContext(ctx).
-		Debug().
 		Model(&domain.User{}).
 		Where("user_id = ?", user.UserID).
 		Updates(updates)
@@ -127,4 +149,20 @@ func (r *UserRepository) GetUserRoleByID(ctx context.Context, userID int64) (int
 		return 0, error_code.UserNotExists
 	}
 	return roleID, nil
+}
+
+// UpdateAvatar 更新用户的头像路径
+func (r *UserRepository) UpdateAvatar(ctx context.Context, req *domain.UpdateAvatarRequest) error {
+	result := r.gorm.WithContext(ctx).
+		Model(&domain.User{}).
+		Where("user_id = ?", req.UserID).
+		Update("avatar_url", req.AvatarURL)
+
+	if result.Error != nil {
+		return fmt.Errorf("%w: %v", error_code.ErrDB, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return error_code.UserNotExists
+	}
+	return nil
 }
