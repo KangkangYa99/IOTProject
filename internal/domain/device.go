@@ -27,22 +27,32 @@ type BindDeviceResp struct {
 }
 
 // UnbindDevice 设备解绑请求 DTO
-// 仅需提供设备 UID，UserID 通过 Context 安全注入。
 type UnbindDevice struct {
 	DeviceUID string `json:"device_uid" binding:"required"`
 	UserID    int64  `json:"-"`
 }
 
+// UpdateDeviceNameRequest 更新设备名称请求
+type UpdateDeviceNameRequest struct {
+	DeviceUID  string `json:"device_uid" binding:"required"`
+	DeviceName string `json:"device_name" binding:"required"`
+	UserID     int64  `json:"-"`
+}
+
 // DeviceInfo 设备列表响应封装
-// 包含总数统计与具体的设备对象列表。
 type DeviceInfo struct {
 	TotalCount int      `json:"total_count"`
 	Devices    []Device `json:"devices"`
-	Message    string   `json:"-"` // 内部消息，不序列化到 JSON
+	Message    string   `json:"-"`
 }
+
 type DeviceRepository interface {
 	BindDevice(ctx context.Context, BindInfo *BindDeviceResp) error
 	UnbindDevice(ctx context.Context, req *UnbindDevice) (int64, error)
+	GetUIDByID(ctx context.Context, deviceID int64) (string, error)
 	GetDeviceInfo(ctx context.Context, userID int64) (*DeviceInfo, error)
 	GetDeviceOwner(ctx context.Context, uid string) (*int64, error)
+	GetDeviceInfoByUID(ctx context.Context, uid string) (*Device, error)
+	UpdateDeviceName(ctx context.Context, uid string, name string) error
+	UpdateDeviceStatus(ctx context.Context, uid string, status string) error
 }
