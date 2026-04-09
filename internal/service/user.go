@@ -8,10 +8,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 	"unicode"
 
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type UserService struct {
@@ -145,6 +148,10 @@ func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterReque
 // 支持多维度身份识别，校验账号状态及密码哈希；认证通过后生成 JWT 令牌，
 // 并同步维护 Redis 中的 Token 白名单集合，设置 3 天有效期。
 func (s *UserService) Login(ctx context.Context, req domain.LoginRequest) (*domain.LoginResponse, error) {
+	err := s.VerifyCaptcha(ctx, req.DeviceID, "login", req.CaptchaId, req.Code)
+	if err != nil {
+		return nil, err
+	}
 	user, err := s.repo.FindByIdentity(ctx, req.Identity)
 	if err != nil {
 		return nil, error_code.PasswordFail
@@ -158,17 +165,18 @@ func (s *UserService) Login(ctx context.Context, req domain.LoginRequest) (*doma
 		return nil, error_code.PasswordFail
 	}
 	//生成token
-	token, err := utils.GenerateToken(user.UserID)
+	token, _ := utils.GenerateToken(user.UserID)
 	if err != nil {
 		return nil, error_code.ServerError
 	}
 	tokenSetKey := fmt.Sprintf("auth:tokens:%d", user.UserID)
+
 	err = s.redis.SAdd(ctx, tokenSetKey, token).Err()
 	if err != nil {
 		fmt.Printf("Redis 记录 Token 失败: %v\n", err)
 	}
-	//三天时间
 	s.redis.Expire(ctx, tokenSetKey, 3*24*time.Hour)
+
 	return &domain.LoginResponse{
 		AccessToken: token,
 		ExpiresIn:   3 * 86400,
@@ -231,7 +239,7 @@ func (s *UserService) UpdateProfile(ctx context.Context, userID int64, req *doma
 		}
 		updateData.PasswordHash = hashed
 	}
-	if err := s.repo.UpdateUser(ctx, updateData); err != nil {
+	if err = s.repo.UpdateUser(ctx, updateData); err != nil {
 		if errors.Is(err, error_code.ErrUserExists) {
 			return error_code.UserExists
 		}
@@ -240,12 +248,35 @@ func (s *UserService) UpdateProfile(ctx context.Context, userID int64, req *doma
 	return nil
 }
 
+// ResetPassword 处理用户忘记密码时的重置操作。
+func (s *UserService) ResetPassword(ctx context.Context, req *domain.ResetPasswordRequest) error {
+	//err := s.VerifyCaptcha(ctx, req.DeviceID, "login", req.CaptchaId, req.Code)
+	//if err != nil {
+	//	return nil, err
+	//}
+	user, err := s.repo.FindByIdentity(ctx, req.Username)
+	if err != nil {
+		return err
+	}
+	if user.PhoneNumber != req.PhoneNumber || user.Email != req.Email {
+		return error_code.UserDataAuthFail
+	}
+	hashedPwd, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return error_code.ServerError
+	}
+	return s.repo.UpdatePasswordHash(ctx, user.UserID, string(hashedPwd))
+}
+
 // GetUserByID 根据用户唯一 ID 获取详细信息
 // 直接从 Repository 层获取用户实体数据，常用于个人中心展示或内部逻辑调用。
 func (s *UserService) GetUserByID(ctx context.Context, userID int64) (*domain.User, error) {
 	user, err := s.repo.GetUserInfoByID(ctx, userID)
 	if err != nil {
 		return nil, err
+	}
+	if user.AvatarURL == "" {
+		user.AvatarURL = "/static/uploads/unnamed.jpg"
 	}
 	return user, nil
 }
@@ -306,4 +337,53 @@ func (s *UserService) AdminCreateUser(ctx context.Context, req domain.AdminCreat
 		UserID:   userInfo.UserID,
 		Username: userInfo.Username,
 	}, nil
+}
+
+// GenerateCaptchaService 获取验证码
+func (s *UserService) GenerateCaptchaService(ctx context.Context, req domain.CaptchaRequest) (*domain.CaptchaResponse, error) {
+	id, b64s, answer, err := utils.GenerateCaptchaImage()
+	if err != nil {
+		return nil, err
+	}
+	storeKey := fmt.Sprintf("captcha:%s:%s:%s", req.Action, req.DeviceID, id)
+	err = s.redis.Set(ctx, storeKey, answer, 5*time.Minute).Err()
+	if err != nil {
+		return nil, err
+	}
+	return &domain.CaptchaResponse{
+		CaptchaID: id,
+		Image:     b64s,
+	}, nil
+}
+
+// VerifyCaptcha 在redis去验证一下验证码的可用性
+func (s *UserService) VerifyCaptcha(ctx context.Context, deviceID, action, captchaID, inputCode string) error {
+	storeKey := fmt.Sprintf("captcha:%s:%s:%s", action, deviceID, captchaID)
+	fmt.Println(storeKey)
+	realAnswer, err := s.redis.Get(ctx, storeKey).Result()
+	if err != nil {
+		return error_code.CodeFail
+	}
+	if realAnswer != inputCode {
+		return error_code.CodeFail
+	}
+	s.redis.Del(ctx, storeKey)
+	return nil
+}
+
+// UpdateUserAvatar 处理头像更新的业务逻辑
+func (s *UserService) UpdateUserAvatar(ctx context.Context, req domain.UpdateAvatarRequest) error {
+	ext := filepath.Ext(req.AvatarURL)
+	allowed := map[string]bool{
+		".jpg":  true,
+		".jpeg": true,
+		".png":  true,
+	}
+	if !allowed[strings.ToLower(ext)] {
+		return error_code.InvalidFileType
+	}
+	if req.UserID <= 0 {
+		return error_code.InvalidParams
+	}
+	return s.repo.UpdateAvatar(ctx, &req)
 }
