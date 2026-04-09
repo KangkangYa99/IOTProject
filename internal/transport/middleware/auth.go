@@ -61,13 +61,18 @@ func JWTAUTH(userRepo domain.UserRepository) gin.HandlerFunc {
 func ErrorHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
-		if len(c.Errors) > 0 {
-			err := c.Errors.Last().Err
-			var myErr *error_code.APIError
-			if errors.As(err, &myErr) {
-				response.Fail(c, myErr.Code, myErr.Message)
-			}
-			c.Abort()
+		if len(c.Errors) == 0 {
+			return
 		}
+		err := c.Errors.Last().Err
+		var myErr *error_code.APIError
+		if errors.As(err, &myErr) {
+			response.Fail(c, myErr.Code, myErr.Message)
+			c.Abort()
+			return
+		}
+		response.Fail(c, error_code.ServerError.Code, error_code.ServerError.Message)
+		c.Abort()
+
 	}
 }
