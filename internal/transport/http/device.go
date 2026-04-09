@@ -3,6 +3,7 @@ package http
 import (
 	"IOTProject/internal/domain"
 	"IOTProject/internal/service"
+	"IOTProject/internal/websocket"
 	"IOTProject/pkg/error_code"
 	"IOTProject/pkg/response"
 
@@ -11,11 +12,13 @@ import (
 
 type DeviceHandle struct {
 	svc service.DeviceService
+	hub *websocket.Hub
 }
 
-func NewDeviceHandle(svc service.DeviceService) *DeviceHandle {
+func NewDeviceHandle(svc service.DeviceService, hub *websocket.Hub) *DeviceHandle {
 	return &DeviceHandle{
 		svc: svc,
+		hub: hub,
 	}
 }
 
@@ -41,6 +44,15 @@ func (h *DeviceHandle) BindDevice(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	h.hub.PublishEvent(websocket.WsEvent{
+		Type:      "bind",
+		UserID:    req.UserID,
+		DeviceUID: req.DeviceUID,
+		Data: map[string]interface{}{
+			"device_name": req.DeviceName,
+			"status":      "offline",
+		},
+	})
 	response.Success(c, nil)
 }
 
@@ -66,6 +78,34 @@ func (h *DeviceHandle) UnBindDevice(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	h.hub.PublishEvent(websocket.WsEvent{
+		Type:      "unbind",
+		UserID:    req.UserID,
+		DeviceUID: req.DeviceUID,
+		Data:      "设备解绑成功",
+	})
+	response.Success(c, nil)
+}
+
+// UpdateDeviceNameHandler 修改设备用户名
+func (h *DeviceHandle) UpdateDeviceNameHandler(c *gin.Context) {
+	var req domain.UpdateDeviceNameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(error_code.InvalidParams)
+		return
+	}
+	req.UserID = c.GetInt64("userID")
+	err := h.svc.UpdateDeviceName(c.Request.Context(), &req)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	h.hub.PublishEvent(websocket.WsEvent{
+		Type:         "UpdateDeviceName",
+		UserID:       req.UserID,
+		DeviceUID:    req.DeviceUID,
+		ObjectString: req.DeviceName,
+	})
 	response.Success(c, nil)
 }
 
