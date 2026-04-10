@@ -69,7 +69,7 @@ func (d *DeviceRepository) UnbindDevice(ctx context.Context, UnBindInfo *domain.
 			Where("device_id = ?", device.DeviceID).
 			Updates(map[string]interface{}{
 				"user_id":     nil,
-				"device_name": "",
+				"device_name": nil,
 			})
 		if result.Error != nil {
 			return result.Error
