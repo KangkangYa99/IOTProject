@@ -18,22 +18,9 @@ func NewDeviceService(repo domain.DeviceRepository) *DeviceService {
 		repo: repo,
 	}
 }
-func (s *DeviceService) BindDevice(ctx context.Context, req *domain.BindDeviceResp) error {
-	//查看设备拥有者
-	//Info, err := s.repo.GetDeviceInfoByUID(ctx, req.DeviceUID)
-	//if err != nil {
-	//	if errors.Is(err, gorm.ErrRecordNotFound) {
-	//		return error_code.DeviceNotFound
-	//	}
-	//	return err
-	//}
-	//设备被其他人绑定
-	//if Info.UserID != nil {
-	//	log.Printf("[DEBUG] 设备 %s 已被绑定, 拥有者 ID: %d", req.DeviceUID, Info.UserID)
-	//	return error_code.DeviceIsBind
-	//}
-	//return s.repo.BindDevice(ctx, req)
 
+// BindDevice 执行设备绑定逻辑
+func (s *DeviceService) BindDevice(ctx context.Context, req *domain.BindDeviceResp) error {
 	err := s.repo.BindDevice(ctx, req)
 	if err != nil {
 		return err
