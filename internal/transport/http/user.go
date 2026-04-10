@@ -96,8 +96,35 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-
 	response.Success(c, "修改成功")
+}
+func (h *UserHandler) ChangePassword(c *gin.Context) {
+	var req domain.UpdatePasswordRequest
+	// 1. 绑定 JSON 参数（对应前端：旧密码、新密码、验证手机号）
+	if err := c.ShouldBindJSON(&req); err != nil {
+		_ = c.Error(error_code.ShouldBindError)
+		return
+	}
+	// 2. 获取当前登录用户的 userID
+	val, exists := c.Get("userID")
+	if !exists {
+		_ = c.Error(error_code.NotLogin)
+		return
+	}
+	uid, ok := val.(int64)
+	if !ok {
+		_ = c.Error(error_code.ServerError)
+		return
+	}
+	// 3. 调用 Service 层执行修改密码逻辑
+	err := h.svc.ChangePassword(c.Request.Context(), uid, &req)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	// 4. 返回成功响应
+	response.Success(c, "密码修改成功")
 }
 
 // Logout 处理用户退出登录请求
@@ -149,37 +176,6 @@ func (h *UserHandler) GetUserInfo(c *gin.Context) {
 	response.Success(c, vo)
 }
 
-func (h *UserHandler) AdminCreateUser(c *gin.Context) {
-	_, exists := c.Get("userID")
-
-	if !exists {
-		response.Fail(c, 401, "未登录")
-		return
-	}
-	currentUserRole, exists := c.Get("roleID")
-	if !exists {
-		response.Fail(c, 401, "权限信息缺失")
-		return
-	}
-	roleID := currentUserRole.(int)
-	// 权限验证：只有管理员(2)及以上才能创建用户
-	if roleID < 2 {
-		response.Fail(c, 403, "权限不足，无法创建用户")
-		return
-	}
-	var req domain.AdminCreateUserRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, 400, "参数错误: "+err.Error())
-		return
-	}
-	res, err := h.svc.AdminCreateUser(c.Request.Context(), req, roleID)
-	if err != nil {
-		_ = c.Error(err)
-		return
-	}
-	response.Success(c, res)
-}
-
 // GetCaptcha 获取验证码
 func (h *UserHandler) GetCaptcha(c *gin.Context) {
 
@@ -210,7 +206,7 @@ func (h *UserHandler) UploadAvatar(c *gin.Context) {
 	}
 	userID := id.(int64)
 
-	//限制请求体大小 (5MB)
+	// 限制请求体大小 (5MB)
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 5<<20)
 
 	file, err := c.FormFile("avatar")
@@ -226,7 +222,7 @@ func (h *UserHandler) UploadAvatar(c *gin.Context) {
 	}
 	defer f.Close()
 
-	//校验图片内容
+	// 校验图片内容
 	img, format, err := image.Decode(f)
 	if err != nil {
 		log.Printf("[SECURITY] 图片解码失败，可能是伪造文件: %v", err)
@@ -234,7 +230,7 @@ func (h *UserHandler) UploadAvatar(c *gin.Context) {
 		return
 	}
 
-	//校验图片分辨率，防止像素炸弹
+	// 校验图片分辨率，防止像素炸弹
 	if img.Bounds().Dx() > 4096 || img.Bounds().Dy() > 4096 {
 		_ = c.Error(error_code.InvalidParams.WithDetails("图片尺寸过大"))
 		return
@@ -253,7 +249,7 @@ func (h *UserHandler) UploadAvatar(c *gin.Context) {
 
 	//更新数据库
 	avatarURL := "/static/uploads/" + filename
-	if err := h.svc.UpdateUserAvatar(c.Request.Context(), domain.UpdateAvatarRequest{
+	if err = h.svc.UpdateUserAvatar(c.Request.Context(), domain.UpdateAvatarRequest{
 		UserID:    userID,
 		AvatarURL: avatarURL,
 	}); err != nil {

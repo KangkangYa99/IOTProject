@@ -73,6 +73,10 @@ func (s *UserService) ValidPassword(password string) error {
 // 包含多重分布式锁保证并发安全、唯一性字段（用户名/手机/邮箱）查重、密码强度校验及哈希加密。
 // 成功后将用户信息持久化至数据库，并返回用户基本信息。
 func (s *UserService) RegisterUser(ctx context.Context, req domain.RegisterRequest) (*domain.RegisterResponse, error) {
+	err := s.VerifyCaptcha(ctx, req.DeviceID, "register", req.CaptchaId, req.Code)
+	if err != nil {
+		return nil, err
+	}
 	//分布式锁
 	locks := map[string]string{
 		"lock:reg:user:" + req.Username:     "username",
@@ -202,17 +206,30 @@ func (s *UserService) Logout(ctx context.Context, userID int64, token string) er
 // 支持局部更新手机号与邮箱（包含查重逻辑）；若涉及新密码变更，则触发强度校验与加密，
 // 最终调用 Repository 执行数据库增量更新。
 func (s *UserService) UpdateProfile(ctx context.Context, userID int64, req *domain.UpdateUserRequest) error {
-	//获取旧密码
+	// 1. 获取旧数据
 	user, err := s.repo.GetUserInfoByID(ctx, userID)
 	if err != nil {
 		return error_code.UserNotExists
 	}
-	if !crypto.CheckPasswordHash(req.OldPassword, user.PasswordHash) {
-		return error_code.PasswordFail
+	// 2. 识别变动（Dirty Check）
+	var cPhone, cEmail string
+	hasChanged := false
+	// 只有新手机号不为空，且跟原来不一样时，才需要改
+	if req.PhoneNumber != "" && req.PhoneNumber != user.PhoneNumber {
+		cPhone = req.PhoneNumber
+		hasChanged = true
 	}
-
-	//检查手机号，邮箱是否被注册
-	_, pEx, eEx, err := s.repo.CheckUserExists(ctx, "", req.PhoneNumber, req.Email)
+	// 只有新邮箱不为空，且跟原来不一样时，才需要改
+	if req.Email != "" && req.Email != user.Email {
+		cEmail = req.Email
+		hasChanged = true
+	}
+	// 3. 如果手机和邮箱都没改，直接点保存也视为成功
+	if !hasChanged {
+		return nil
+	}
+	// 4. 只有变动的字段才去查重
+	pEx, eEx, err := s.repo.CheckUserExistsForUpdate(ctx, userID, cPhone, cEmail)
 	if err != nil {
 		return err
 	}
@@ -222,38 +239,19 @@ func (s *UserService) UpdateProfile(ctx context.Context, userID int64, req *doma
 	if eEx {
 		return error_code.UserEmailExists
 	}
-
-	updateData := &domain.UpdateUser{
+	return s.repo.UpdateUser(ctx, &domain.UpdateUser{
 		UserID:      userID,
 		PhoneNumber: req.PhoneNumber,
 		Email:       req.Email,
-	}
-	if req.NewPassword != "" {
-		// 增加一个简单的密码强度校验
-		if err = s.ValidPassword(req.NewPassword); err != nil {
-			return err
-		}
-		hashed, err2 := crypto.HashPassword(req.NewPassword)
-		if err2 != nil {
-			return error_code.ServerError
-		}
-		updateData.PasswordHash = hashed
-	}
-	if err = s.repo.UpdateUser(ctx, updateData); err != nil {
-		if errors.Is(err, error_code.ErrUserExists) {
-			return error_code.UserExists
-		}
-		return err
-	}
-	return nil
+	})
 }
 
 // ResetPassword 处理用户忘记密码时的重置操作。
 func (s *UserService) ResetPassword(ctx context.Context, req *domain.ResetPasswordRequest) error {
-	//err := s.VerifyCaptcha(ctx, req.DeviceID, "login", req.CaptchaId, req.Code)
-	//if err != nil {
-	//	return nil, err
-	//}
+	err := s.VerifyCaptcha(ctx, req.DeviceID, "change_password", req.CaptchaId, req.Code)
+	if err != nil {
+		return err
+	}
 	user, err := s.repo.FindByIdentity(ctx, req.Username)
 	if err != nil {
 		return err
@@ -268,6 +266,36 @@ func (s *UserService) ResetPassword(ctx context.Context, req *domain.ResetPasswo
 	return s.repo.UpdatePasswordHash(ctx, user.UserID, string(hashedPwd))
 }
 
+// ChangePassword 处理修改密码的操作。
+func (s *UserService) ChangePassword(ctx context.Context, userID int64, req *domain.UpdatePasswordRequest) error {
+	err := s.VerifyCaptcha(ctx, req.DeviceID, "change_password", req.CaptchaId, req.Code)
+	if err != nil {
+		return err
+	}
+	// 1. 获取用户信息
+	user, err := s.repo.GetUserInfoByID(ctx, userID)
+	if err != nil {
+		return error_code.UserNotExists
+	}
+	if req.VerifyPhone != user.PhoneNumber {
+		return error_code.PhoneNumberFail
+	}
+	if !crypto.CheckPasswordHash(req.OldPassword, user.PasswordHash) {
+		return error_code.OldPasswordFail
+	}
+	if err = s.ValidPassword(req.NewPassword); err != nil {
+		return err
+	}
+	if req.OldPassword == req.NewPassword {
+		return error_code.PassWordSame
+	}
+	hashedPwd, err := crypto.HashPassword(req.NewPassword)
+	if err != nil {
+		return error_code.ServerError
+	}
+	return s.repo.UpdatePasswordHash(ctx, userID, hashedPwd)
+}
+
 // GetUserByID 根据用户唯一 ID 获取详细信息
 // 直接从 Repository 层获取用户实体数据，常用于个人中心展示或内部逻辑调用。
 func (s *UserService) GetUserByID(ctx context.Context, userID int64) (*domain.User, error) {
@@ -279,64 +307,6 @@ func (s *UserService) GetUserByID(ctx context.Context, userID int64) (*domain.Us
 		user.AvatarURL = "/static/uploads/unnamed.jpg"
 	}
 	return user, nil
-}
-
-func (s *UserService) AdminCreateUser(ctx context.Context, req domain.AdminCreateUserRequest, currentUserRole int) (*domain.RegisterResponse, error) {
-	switch currentUserRole {
-	case 1: // 普通员工
-		return nil, error_code.NoPermission.WithDetails("无法创建用户")
-	case 2: // 管理员
-		if req.RoleID != 1 {
-			return nil, error_code.NoPermission.WithDetails("管理员只能创建普通员工")
-		}
-	case 3: // 经理
-		if req.RoleID != 1 && req.RoleID != 2 {
-			return nil, error_code.NoPermission.WithDetails("经理只能创建普通员工或管理员")
-		}
-	default:
-		return nil, error_code.NoPermission.WithDetails("无效的用户角色")
-	}
-	if err := s.ValidPassword(req.Password); err != nil {
-		return nil, err
-	}
-	uEx, pEx, eEx, err := s.repo.CheckUserExists(ctx, req.Username, req.PhoneNumber, req.Email)
-	if err != nil {
-		return nil, err
-	}
-	if uEx {
-		return nil, error_code.UserExists
-	}
-	if pEx {
-		return nil, error_code.UserNumberExists
-	}
-	if eEx {
-		return nil, error_code.UserEmailExists
-	}
-	hashedPwd, err := crypto.HashPassword(req.Password)
-	if err != nil {
-		return nil, error_code.ServerError
-	}
-	userInfo := &domain.User{
-		Username:     req.Username,
-		PasswordHash: hashedPwd,
-		PhoneNumber:  req.PhoneNumber,
-		Email:        req.Email,
-		RoleID:       req.RoleID,
-	}
-	err = s.repo.CreateUser(ctx, userInfo)
-	if err != nil {
-		if errors.Is(err, error_code.ErrUserExists) {
-			return nil, error_code.UserExists
-		}
-		if errors.Is(err, error_code.ErrDB) {
-			return nil, error_code.DatabaseError
-		}
-		return nil, err
-	}
-	return &domain.RegisterResponse{
-		UserID:   userInfo.UserID,
-		Username: userInfo.Username,
-	}, nil
 }
 
 // GenerateCaptchaService 获取验证码

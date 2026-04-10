@@ -68,6 +68,37 @@ func (r *UserRepository) CheckUserExists(ctx context.Context, username, phone, e
 	return uEx, pEx, eEx, nil
 }
 
+// CheckUserExistsForUpdate 修改资料时的排他性查重
+// 检查除指定的 excludeUserID 外，是否有其他用户占用了相同的手机号或邮箱，防止修改后的资料与他人冲突。
+func (r *UserRepository) CheckUserExistsForUpdate(ctx context.Context, excludeUserID int64, phone, email string) (bool, bool, error) {
+	var results []struct {
+		PhoneNumber string
+		Email       string
+	}
+
+	// 只查手机号和邮箱，且排除自己
+	err := r.gorm.WithContext(ctx).Model(&domain.User{}).
+		Select("phone_number, email").
+		Where("(phone_number = ? OR email = ?)", phone, email).
+		Where("user_id != ?", excludeUserID).
+		Find(&results).Error
+
+	if err != nil {
+		return false, false, err
+	}
+
+	var pEx, eEx bool
+	for _, row := range results {
+		if phone != "" && row.PhoneNumber == phone {
+			pEx = true
+		}
+		if email != "" && row.Email == email {
+			eEx = true
+		}
+	}
+	return pEx, eEx, nil
+}
+
 // FindByIdentity 根据身份标识查找唯一用户
 // 支持通过用户名、手机号或邮箱（三选一）进行匹配，
 // 若记录不存在则返回 UserNotExists 错误，常用于登录逻辑中的用户定位。
@@ -138,6 +169,8 @@ func (r *UserRepository) GetUserInfoByID(ctx context.Context, userID int64) (*do
 	return &user, nil
 }
 
+// GetUserRoleByID 根据用户 ID 查询其对应的角色权限 ID
+// 常用于鉴权中间件或 Service 层判断用户是否有权访问特定资源。
 func (r *UserRepository) GetUserRoleByID(ctx context.Context, userID int64) (int, error) {
 	var roleID int
 

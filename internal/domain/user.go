@@ -38,6 +38,9 @@ type RegisterRequest struct {
 	Password    string `json:"password" binding:"required,min=6,max=50"`
 	PhoneNumber string `json:"phone" binding:"required,len=11"`
 	Email       string `json:"email" binding:"required,email"`
+	DeviceID    string `json:"device_id" form:"device_id"`
+	Code        string `json:"code" binding:"required"`
+	CaptchaId   string `json:"captcha_id" binding:"required"`
 }
 
 // RegisterResponse 注册成功后的回执模型
@@ -65,6 +68,7 @@ type LoginResponse struct {
 }
 
 // UpdateUser 内部更新用户资料使用的结构体。
+// 用于将 Service 层处理后的数据（如加密后的密码哈希）传递给 Repository 层执行持久化。
 type UpdateUser struct {
 	UserID       int64  `gorm:"primaryKey"`
 	PhoneNumber  string `json:"phone" gorm:"column:phone_number"`
@@ -79,24 +83,27 @@ type ResetPasswordRequest struct {
 	PhoneNumber string `json:"phone" binding:"required"`
 	Email       string `json:"email" binding:"required"`
 	NewPassword string `json:"new_password" binding:"required,min=6,max=50"`
+	DeviceID    string `json:"device_id" form:"device_id"`
+	Code        string `json:"code" binding:"required"`
+	CaptchaId   string `json:"captcha_id" binding:"required"`
 }
 
 // UpdateUserRequest 用户修改资料的 HTTP 请求模型
 // 字段标记为 omitempty，允许用户仅提交需要修改的项（如只改手机号而不改密码）。
 type UpdateUserRequest struct {
-	OldPassword string `json:"old_password" gorm:"-"`
-	NewPassword string `json:"new_password" binding:"omitempty,min=6" gorm:"column:password_hash"`
 	PhoneNumber string `json:"phone" binding:"omitempty,len=11" gorm:"column:phone_number"`
 	Email       string `json:"email" binding:"omitempty,email" gorm:"column:email"`
 }
 
-type AdminCreateUserRequest struct {
-	Username    string `json:"username" binding:"required,min=3,max=50"`
-	Password    string `json:"password" binding:"required,min=6,max=50"`
-	PhoneNumber string `json:"phone" binding:"required,len=11"`
-	Email       string `json:"email" binding:"required,email"`
-	RoleID      int    `json:"role_id" binding:"required,min=1,max=3"`
-	Status      int    `json:"status"`
+// UpdatePasswordRequest 用户在登录状态下修改安全密码的请求模型
+// 包含旧密码验证、新密码设定、绑定手机号校验以及人机验证相关参数。
+type UpdatePasswordRequest struct {
+	OldPassword string `json:"old_password" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required,min=6"`
+	VerifyPhone string `json:"verify_phone" binding:"required,len=11"`
+	DeviceID    string `json:"device_id" form:"device_id"`
+	Code        string `json:"code" binding:"required"`
+	CaptchaId   string `json:"captcha_id" binding:"required"`
 }
 
 // CaptchaRequest 获取验证码的请求参数
@@ -119,6 +126,7 @@ type UpdateAvatarRequest struct {
 type UserRepository interface {
 	CreateUser(ctx context.Context, user *User) error
 	CheckUserExists(ctx context.Context, username, phone, email string) (bool, bool, bool, error)
+	CheckUserExistsForUpdate(ctx context.Context, excludeUserID int64, phone, email string) (bool, bool, error)
 	FindByIdentity(ctx context.Context, identity string) (*User, error)
 	UpdatePasswordHash(ctx context.Context, userID int64, newHash string) error
 	UpdateUser(ctx context.Context, user *UpdateUser) error
