@@ -98,13 +98,16 @@ func (s *DevicePolicyService) GetPendingAlerts(ctx context.Context, userID int64
 
 // MarkAlertHandled 将报警设为已处理 (1)
 func (s *DevicePolicyService) MarkAlertHandled(ctx context.Context, userID int64, logID int64) error {
-	// 1. 获取日志，检查是否存在及归属权
+	// 获取日志，检查是否存在及归属权
 	log, err := s.repo.GetLogByID(ctx, logID)
 	if err != nil {
 		return err
 	}
 	if log.UserID != userID {
 		return error_code.NotDeviceOwner
+	}
+	if log.Status == 1 {
+		return nil
 	}
 	return s.repo.UpdateStatus(ctx, logID, 1)
 }
