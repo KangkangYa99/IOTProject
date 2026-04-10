@@ -56,6 +56,7 @@ func InitRouter(cfg HandlerConfig) *gin.Engine {
 	UserAuth.Use(middleware.JWTAUTH(cfg.UserRepo))
 	{
 		UserAuth.POST("/update", cfg.UserHandle.UpdateProfile)
+		UserAuth.POST("/changepassword", cfg.UserHandle.ChangePassword)
 		UserAuth.GET("/info", cfg.UserHandle.GetUserInfo)
 		UserAuth.POST("/logout", cfg.UserHandle.Logout)
 		UserAuth.POST("/uploadavatar", cfg.UserHandle.UploadAvatar)
