@@ -94,7 +94,12 @@ func (h *DeviceHandle) UpdateDeviceNameHandler(c *gin.Context) {
 		_ = c.Error(error_code.InvalidParams)
 		return
 	}
-	req.UserID = c.GetInt64("userID")
+	uid, exists := c.Get("userID")
+	if !exists {
+		_ = c.Error(error_code.NotLogin)
+		return
+	}
+	req.UserID = uid.(int64)
 	err := h.svc.UpdateDeviceName(c.Request.Context(), &req)
 	if err != nil {
 		_ = c.Error(err)
