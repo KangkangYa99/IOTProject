@@ -3,9 +3,11 @@ package websocket
 import (
 	"IOTProject/internal/domain"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -17,6 +19,11 @@ type DeviceClient struct {
 	Hub       *Hub
 	send      chan []byte
 	Listener  domain.EventListener
+}
+type SignedData struct {
+	domain.DeviceData
+	Timestamp int64  `json:"timestamp"`
+	Sign      string `json:"sign"`
 }
 
 func (d *DeviceClient) ReadPump() {
@@ -49,12 +56,32 @@ func (d *DeviceClient) ReadPump() {
 					continue
 				}
 				if t == "data" {
-					log.Printf(">>> 收到设备 %s 数据，准备入库", d.DeviceUID)
-					var data domain.DeviceData
-					if err = json.Unmarshal(message, &data); err != nil {
-						log.Printf("解析设备数据失败: %v", err)
+					var sd SignedData
+					if err = json.Unmarshal(message, &sd); err != nil {
+						log.Printf("解析带签名数据失败: %v", err)
 						continue
 					}
+					sd.DeviceData.DeviceUID = d.DeviceUID
+					const secret = "23wlw4IOT"
+					rawStr := fmt.Sprintf("%s%.1f%.1f%d%s",
+						d.DeviceUID,
+						sd.Temperature,
+						sd.Humidity,
+						sd.Timestamp,
+						secret,
+					)
+					expectedSign := fmt.Sprintf("%x", md5.Sum([]byte(rawStr)))
+					if !strings.EqualFold(sd.Sign, expectedSign) {
+						log.Printf("[SECURITY] 签名校验失败！疑似篡改数据。UID: %s", d.DeviceUID)
+						continue
+					}
+					if time.Now().Unix()-sd.Timestamp > 60 {
+						log.Printf("[SECURITY] 数据包已过期（重放攻击预防）。UID: %s", d.DeviceUID)
+						continue
+					}
+					log.Printf(">>> 收到设备 %s 数据，准备入库", d.DeviceUID)
+					var data domain.DeviceData
+
 					data.DeviceUID = d.DeviceUID
 					if d.Listener != nil {
 						if err = d.Listener.SaveData(context.Background(), &data); err != nil {
