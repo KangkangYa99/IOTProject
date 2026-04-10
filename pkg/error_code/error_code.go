@@ -25,6 +25,7 @@ const (
 	PasswordFailCode
 	UserDataAuthFailCode
 	OldPasswordFailCode
+	PhoneNumberFailCode
 	PassWordSameCode
 	CheckPhoneFailCode
 	DeviceIDNotFoundCode
@@ -61,17 +62,17 @@ const (
 )
 
 var (
-	ServerError        = &APIError{Code: ServerErrorCode, Message: "服务器内部错误。"}
-	ServiceUnavailable = &APIError{Code: ServiceUnavailableCode, Message: "服务器繁忙，请稍后再试。"}
-	DatabaseError      = &APIError{Code: DatabaseErrorCode, Message: "数据库操作失败。"}
-	UserExists         = &APIError{Code: UserExistsCode, Message: "用户已注册。"}
-	InvalidParam       = &APIError{Code: InvalidParamCode, Message: "非法参数"}
-	UserNotExists      = &APIError{Code: UserNotExistsCode, Message: "用户不存在。"}
-	PasswordIsEasy     = &APIError{Code: PasswordIsEasyCode, Message: "密码过于简单。"}
-	UserNumberExists   = &APIError{Code: UserNumberExistsCode, Message: "手机号已注册。"}
-	UserEmailExists    = &APIError{Code: UserEmailExistsCode, Message: "邮箱已注册。"}
-	UserDataAuthFail   = &APIError{Code: UserDataAuthFailCode, Message: "用户数据资料认证错误。"}
-
+	ServerError             = &APIError{Code: ServerErrorCode, Message: "服务器内部错误。"}
+	ServiceUnavailable      = &APIError{Code: ServiceUnavailableCode, Message: "服务器繁忙，请稍后再试。"}
+	DatabaseError           = &APIError{Code: DatabaseErrorCode, Message: "数据库操作失败。"}
+	UserExists              = &APIError{Code: UserExistsCode, Message: "用户已注册。"}
+	InvalidParam            = &APIError{Code: InvalidParamCode, Message: "非法参数"}
+	UserNotExists           = &APIError{Code: UserNotExistsCode, Message: "用户不存在。"}
+	PasswordIsEasy          = &APIError{Code: PasswordIsEasyCode, Message: "密码过于简单。"}
+	UserNumberExists        = &APIError{Code: UserNumberExistsCode, Message: "手机号已注册。"}
+	UserEmailExists         = &APIError{Code: UserEmailExistsCode, Message: "邮箱已注册。"}
+	UserDataAuthFail        = &APIError{Code: UserDataAuthFailCode, Message: "用户数据资料认证错误。"}
+	PhoneNumberFail         = &APIError{Code: PhoneNumberFailCode, Message: "手机号验证失败。"}
 	CodeFail                = &APIError{Code: CodeFailCode, Message: "验证码错误，请重新输入。"}
 	PasswordFail            = &APIError{Code: PasswordFailCode, Message: "账号或密码错误。"}
 	OldPasswordFail         = &APIError{Code: OldPasswordFailCode, Message: "旧密码错误。"}
