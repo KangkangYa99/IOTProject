@@ -24,7 +24,7 @@ func NewDeviceDataService(
 	repo domain.DeviceDataRepository,
 	deviceRepo domain.DeviceRepository,
 	devicePolicyRepo domain.DevicePolicyRepository,
-	hub domain.MessagePusher, // 这里接收接口
+	hub domain.MessagePusher,
 	redis *redis.Client,
 ) *DeviceDataService {
 	return &DeviceDataService{
@@ -45,7 +45,7 @@ func (s *DeviceDataService) SaveDeviceData(ctx context.Context, data *domain.Dev
 		return err
 	}
 	go func() {
-		ctx := context.Background()
+		ctx = context.Background()
 		if err := s.ExecutePolicyEngine(ctx, data); err != nil {
 			log.Printf("策略执行失败: %v", err)
 		}
@@ -89,7 +89,6 @@ func (s *DeviceDataService) GetHistory(ctx context.Context, req *domain.DataHist
 
 // ExecutePolicyEngine 核心策略引擎：根据设备最新数据遍历所有匹配策略并执行。
 func (s *DeviceDataService) ExecutePolicyEngine(ctx context.Context, data *domain.DeviceData) error {
-
 	device, err := s.deviceRepo.GetDeviceInfoByUID(ctx, data.DeviceUID)
 	if err != nil {
 		log.Printf("[ERROR] 获取设备失败: %v", err)
@@ -136,14 +135,12 @@ func (s *DeviceDataService) ExecutePolicyEngine(ctx context.Context, data *domai
 // handleAction 根据策略类型分发报警或控制指令。
 func (s *DeviceDataService) handleAction(policy domain.DevicePolicy, currentVal float64) {
 	actionType := policy.ActionType
-
 	if (actionType == domain.ActionAlert || actionType == domain.ActionBoth) && policy.ActionMessage != "" {
 		s.triggerAlert(policy, currentVal)
 	}
 	if actionType == domain.ActionControl || actionType == domain.ActionBoth {
 		s.triggerControl(policy)
 	}
-
 }
 
 // triggerAlert 执行报警逻辑：Redis 防抖 -> 入库
@@ -248,7 +245,6 @@ func (s *DeviceDataService) triggerControl(policy domain.DevicePolicy) {
 	}
 
 	// 4. 获取设备 UID 并下发
-	// 注意：GetUIDByID 返回的是 string，直接传给 SendToDevice
 	deviceUID, err := s.deviceRepo.GetUIDByID(context.Background(), policy.DeviceID)
 	if err != nil {
 		log.Printf("[ERROR] 策略 %d 触发失败：无法获取设备 UID, err: %v", policy.PolicyID, err)
